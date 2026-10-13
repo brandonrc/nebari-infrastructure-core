@@ -1,0 +1,46 @@
+name: OpenTofu lockfile drift
+
+on:
+  pull_request:
+    paths:
+      - "pkg/providers/cluster/**/templates/**/*.tf"
+      - "pkg/providers/cluster/*/templates/.terraform.lock.hcl"
+      - ".github/workflows/opentofu-lockfile-drift.yml"
+      - "Makefile"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opentofu-lockfile-drift-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          # Kept in step with the runtime floor (pkg/tofu.MinVersion); the
+          # lockfile output itself is version-independent, see ADR-0016.
+          tofu_version: "1.11.3"
+
+      - name: Regenerate lockfiles
+        run: make tofu-lock
+
+      - name: Fail if lockfiles changed
+        run: |
+          # git status also reports untracked lockfiles, which git diff misses
+          # when a new provider's lockfile was never committed.
+          lockfiles='pkg/providers/cluster/*/templates/.terraform.lock.hcl'
+          if [ -n "$(git status --porcelain -- "$lockfiles")" ]; then
+            git status --short -- "$lockfiles"
+            git diff -- "$lockfiles"
+            echo "::error::Lockfiles are stale, missing, or missing platform hashes. Run 'make tofu-lock' and commit the result."
+            exit 1
+          fi
