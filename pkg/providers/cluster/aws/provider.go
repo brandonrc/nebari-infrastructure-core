@@ -181,6 +181,11 @@ func (p *Provider) Validate(ctx context.Context, projectName string, clusterConf
 		}
 	}
 
+	if err := validateKMSKeyARNs(awsCfg.EBSKMSKeyARNs); err != nil {
+		span.RecordError(err)
+		return err
+	}
+
 	// Validate load_balancer_scheme if specified
 	if awsCfg.LoadBalancerScheme != "" && !contains(validLoadBalancerSchemes, awsCfg.LoadBalancerScheme) {
 		err := fmt.Errorf("invalid load_balancer_scheme %q (must be one of: %v)",
@@ -313,7 +318,17 @@ func (p *Provider) Deploy(ctx context.Context, projectName string, clusterConfig
 		}
 	}
 
-	tfVars := awsCfg.toTFVars(projectName, opts.TrustBundle, opts.BackupBucket)
+	// Grant the EBS CSI driver the account's default EBS key when it is
+	// customer managed, or volume creation fails with a KMS error (#699).
+	ec2KeyClient, kmsClient, err := newEBSDefaultKeyClients(ctx, region)
+	if err != nil {
+		span.RecordError(err)
+		return err
+	}
+	defaultEBSKMSKey, detectErr := defaultEBSKMSKeyARN(ctx, ec2KeyClient, kmsClient)
+	reportDefaultEBSKMSKey(ctx, defaultEBSKMSKey)
+
+	tfVars := awsCfg.toTFVars(projectName, opts.TrustBundle, opts.BackupBucket, defaultEBSKMSKey)
 	tf, err := tofu.Setup(ctx, tofuTemplates, tfVars)
 	if err != nil {
 		span.RecordError(err)
@@ -346,8 +361,29 @@ func (p *Provider) Deploy(ctx context.Context, projectName string, clusterConfig
 		return err
 	}
 
+	// A failed detection must not revoke the key an earlier deploy granted:
+	// keep it by overriding the generated tfvars.
+	var planOpts []tfexec.PlanOption
+	var applyOpts []tfexec.ApplyOption
+	if detectErr != nil {
+		outputs, err := tf.Output(ctx)
+		if err != nil {
+			span.RecordError(err)
+			return fmt.Errorf("could not detect the default EBS KMS key (%v) or read the key the previous deploy granted: %w", detectErr, err)
+		}
+		assignments, err := carryForwardEBSKMSKeyVars(ctx, outputs, awsCfg.EBSKMSKeyARNs, detectErr)
+		if err != nil {
+			span.RecordError(err)
+			return err
+		}
+		for _, a := range assignments {
+			planOpts = append(planOpts, tfexec.Var(a))
+			applyOpts = append(applyOpts, tfexec.Var(a))
+		}
+	}
+
 	if opts.DryRun {
-		_, err = tf.Plan(ctx)
+		_, err = tf.Plan(ctx, planOpts...)
 		if err != nil {
 			span.RecordError(err)
 			return err
@@ -355,7 +391,7 @@ func (p *Provider) Deploy(ctx context.Context, projectName string, clusterConfig
 		return nil
 	}
 
-	err = tf.Apply(ctx)
+	err = tf.Apply(ctx, applyOpts...)
 	if err != nil {
 		span.RecordError(err)
 		return err
@@ -568,7 +604,7 @@ func (p *Provider) Destroy(ctx context.Context, projectName string, clusterConfi
 		return err
 	}
 
-	tfVars := awsCfg.toTFVars(projectName, opts.TrustBundle, nil)
+	tfVars := awsCfg.toTFVars(projectName, opts.TrustBundle, nil, "")
 	tf, err := tofu.Setup(ctx, tofuTemplates, tfVars)
 	if err != nil {
 		span.RecordError(err)

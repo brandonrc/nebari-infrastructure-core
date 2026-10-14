@@ -40,6 +40,8 @@ type TFVars struct {
 	EndpointPrivateAccess         bool                 `json:"endpoint_private_access"`
 	EndpointPublicAccess          bool                 `json:"endpoint_public_access"`
 	EKSKMSArn                     *string              `json:"eks_kms_arn,omitempty"`
+	EBSCSIKMSKeyARNs              []string             `json:"ebs_csi_kms_key_arns,omitempty"`
+	EBSDefaultKMSKeyARN           string               `json:"ebs_default_kms_key_arn,omitempty"`
 	ClusterEnabledLogTypes        []string             `json:"cluster_enabled_log_types,omitempty"`
 	CreateIAMRoles                bool                 `json:"create_iam_roles"`
 	ExistingClusterIAMRoleArn     *string              `json:"existing_cluster_iam_role_arn,omitempty"`
@@ -152,7 +154,10 @@ func nodeGroupMatchesSelector(labels, sel map[string]string) bool {
 // top-level trust_bundle resolved by the orchestration layer (base64-encoded
 // PEM), empty when no bundle is configured. backup, when non-nil, asks the
 // module to provision the Longhorn backup bucket and/or Pod Identity role.
-func (c *Config) toTFVars(projectName, caBundle string, backup *cluster.BackupBucketSpec) TFVars {
+// defaultEBSKMSKey is the account's customer managed default EBS key, empty
+// when it is AWS managed or wasn't detected; it is granted to the EBS CSI
+// driver alongside the configured ebs_kms_key_arns.
+func (c *Config) toTFVars(projectName, caBundle string, backup *cluster.BackupBucketSpec, defaultEBSKMSKey string) TFVars {
 	nodeGroups := resolveNodeGroupDefaults(c.NodeGroups)
 	// When Longhorn runs on dedicated nodes, the storage node group(s) must carry
 	// the create-default-disk label or Longhorn provisions no disks and every
@@ -197,6 +202,8 @@ func (c *Config) toTFVars(projectName, caBundle string, backup *cluster.BackupBu
 	if c.EKSKMSArn != "" {
 		vars.EKSKMSArn = &c.EKSKMSArn
 	}
+	vars.EBSCSIKMSKeyARNs = mergeKMSKeyARNs(c.EBSKMSKeyARNs, []string{defaultEBSKMSKey})
+	vars.EBSDefaultKMSKeyARN = defaultEBSKMSKey
 	if c.ExistingClusterRoleArn != "" {
 		vars.ExistingClusterIAMRoleArn = &c.ExistingClusterRoleArn
 	}

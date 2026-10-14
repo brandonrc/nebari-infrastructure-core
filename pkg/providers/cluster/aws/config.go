@@ -8,17 +8,21 @@ import (
 )
 
 type Config struct {
-	Region                    string                           `yaml:"region"`
-	StateBucket               string                           `yaml:"state_bucket,omitempty"`
-	AvailabilityZones         []string                         `yaml:"availability_zones,omitempty"`
-	VPCCIDRBlock              string                           `yaml:"vpc_cidr_block,omitempty"`
-	ExistingVPCID             string                           `yaml:"existing_vpc_id,omitempty"`
-	ExistingPrivateSubnetIDs  []string                         `yaml:"existing_private_subnet_ids,omitempty"`
-	ExistingSecurityGroupID   string                           `yaml:"existing_security_group_id,omitempty"`
-	KubernetesVersion         string                           `yaml:"kubernetes_version,omitempty"`
-	EndpointPrivateAccess     bool                             `yaml:"endpoint_private_access,omitempty"`
-	EndpointPublicAccess      bool                             `yaml:"endpoint_public_access,omitempty"`
-	EKSKMSArn                 string                           `yaml:"eks_kms_arn,omitempty"`
+	Region                   string   `yaml:"region"`
+	StateBucket              string   `yaml:"state_bucket,omitempty"`
+	AvailabilityZones        []string `yaml:"availability_zones,omitempty"`
+	VPCCIDRBlock             string   `yaml:"vpc_cidr_block,omitempty"`
+	ExistingVPCID            string   `yaml:"existing_vpc_id,omitempty"`
+	ExistingPrivateSubnetIDs []string `yaml:"existing_private_subnet_ids,omitempty"`
+	ExistingSecurityGroupID  string   `yaml:"existing_security_group_id,omitempty"`
+	KubernetesVersion        string   `yaml:"kubernetes_version,omitempty"`
+	EndpointPrivateAccess    bool     `yaml:"endpoint_private_access,omitempty"`
+	EndpointPublicAccess     bool     `yaml:"endpoint_public_access,omitempty"`
+	EKSKMSArn                string   `yaml:"eks_kms_arn,omitempty"`
+	// KMS key ARNs (not aliases) the EBS CSI driver may use; key policies must
+	// delegate to IAM. NIC adds the default EBS key when the deployer has
+	// ec2:GetEbsDefaultKmsKeyId and kms:DescribeKey.
+	EBSKMSKeyARNs             []string                         `yaml:"ebs_kms_key_arns,omitempty"`
 	EnabledLogTypes           []string                         `yaml:"enabled_log_types,omitempty"`
 	ExistingClusterRoleArn    string                           `yaml:"existing_cluster_role_arn,omitempty"`
 	ExistingNodeRoleArn       string                           `yaml:"existing_node_role_arn,omitempty"`

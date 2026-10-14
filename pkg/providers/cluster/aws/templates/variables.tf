@@ -62,6 +62,18 @@ variable "eks_kms_arn" {
   default = null
 }
 
+variable "ebs_csi_kms_key_arns" {
+  type    = list(string)
+  default = []
+}
+
+# Recorded only so the ebs_default_kms_key_arn output can carry the detected
+# default EBS key to a later deploy that can't detect it.
+variable "ebs_default_kms_key_arn" {
+  type    = string
+  default = null
+}
+
 variable "cluster_enabled_log_types" {
   type    = list(string)
   default = []
