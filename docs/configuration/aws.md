@@ -79,6 +79,7 @@ Configuration options specific to Amazon Web Services (EKS).
 | DiskSize | `disk_size` | `*int` | No |  |
 | Labels | `labels` | `map[string]string` | No |  |
 | Taints | `taints` | `[]Taint` | No |  |
+| AMIReleaseVersion | `ami_release_version` | `*string` | No | AMI release to pin, e.g. 1.34.11-20260923; must match kubernetes_version. "latest" follows each new release. Unset: a deploy that changes nothing keeps the group on its current release. |
 
 ---
 

@@ -164,6 +164,8 @@ type NodeGroup struct {
 	DiskSize *int              `yaml:"disk_size,omitempty" json:"disk_size,omitempty"`
 	Labels   map[string]string `yaml:"labels,omitempty" json:"labels,omitempty"`
 	Taints   []Taint           `yaml:"taints,omitempty" json:"taints,omitempty"`
+	// AMI release to pin, e.g. 1.34.11-20260923; must match kubernetes_version. "latest" follows each new release. Unset: a deploy that changes nothing keeps the group on its current release.
+	AMIReleaseVersion *string `yaml:"ami_release_version,omitempty" json:"ami_release_version,omitempty"`
 }
 
 type Taint struct {
