@@ -16,18 +16,23 @@ For the operator's CRD schema, reconciliation rules, controller code, and releas
 
 ## 11.2 How NIC Deploys the Operator
 
-The operator is deployed as a foundational ArgoCD application from `pkg/argocd/templates/apps/nebari-operator.yaml`. The actual manifests are pulled from the upstream `nebari-operator` repository via Kustomize, with NIC-specific patches layered on top:
+The operator is deployed as a foundational ArgoCD application from `pkg/argocd/templates/apps/nebari-operator.yaml`, which installs the operator's released Helm chart (`nebari-operator` from the `quay.io/nebari/charts` OCI registry, release name `nebari-operator`) and layers NIC's settings on top through Helm values, the same `valueFiles` seam the other Helm-based foundational apps use (ADR-0014):
 
 ```
-pkg/argocd/templates/manifests/nebari-operator/
-├── kustomization.yaml      # Points at github.com/nebari-dev/nebari-operator
-│                           # at a pinned ref (e.g. v0.1.0-alpha.19) and applies
-│                           # the deployment patch below
-└── deployment-patch.yaml   # Sets environment variables on the controller-manager
-                            # container: Keycloak integration (URL, realm, admin
-                            # secret name/namespace, issuer context path, external
-                            # URL) and the TLS cluster-issuer name
+pkg/argocd/templates/
+├── apps/nebari-operator.yaml           # Chart + pinned version, and the GitOps
+│                                       # repo as the $values ref
+└── values/nebari-operator/base.yaml    # manager.envOverrides: Keycloak integration
+                                        # (URL, realm, admin secret name/namespace,
+                                        # issuer context path, external URL) and the
+                                        # TLS cluster-issuer name; resources; RBAC helpers
 ```
+
+Overrides go in `values/nebari-operator/overlays/*.yaml` in the GitOps repo and survive `--regen-apps`. NIC sets its environment variables in the chart's `manager.envOverrides` map, so an overlay overrides one by key (`manager.envOverrides.KEYCLOAK_REALM: ...`). Don't set one of them in `manager.env`: the chart renders `env` and then appends `envOverrides` without de-duplicating, and server-side apply rejects the duplicate name.
+
+The chart does not create its namespace; `CreateNamespace=true` in the Application's `syncOptions` does, as for every other foundational app.
+
+NIC v0.14.0 and earlier installed the operator with Kustomize from `manifests/nebari-operator/`. The chart keeps every object name, so the CRD, the cluster RBAC and existing NebariApps carry over. The chart does not render the Namespace the Kustomize install declared, so ArgoCD prunes it, and the namespace is recreated along with the operator's Deployment, ServiceAccount, Role, RoleBinding and Service. If the app is left OutOfSync after a failed sync once the old namespace has finished terminating, sync it again. No Application reads `manifests/nebari-operator/` any more; delete it after the regen to tidy the repo.
 
 The operator runs in its own namespace and watches for `NebariApp` CRs across the cluster.
 
@@ -67,9 +72,9 @@ Critically:
 
 Operators of Nebari clusters and software-pack authors should treat the upstream operator's docs as authoritative.
 
-## 11.4 Values Rendered Into the Operator Patch
+## 11.4 Values Rendered Into the Operator's Helm Values
 
-The deployment patch is a Go template rendered by `pkg/argocd` with values that come from a mix of `provider.InfraSettings(cfg)`, `cfg.Domain`, and NIC-internal Keycloak/cert-manager defaults. The fields below correspond to env vars set on the `nebari-operator-controller-manager` container.
+`values/nebari-operator/base.yaml` is a Go template rendered by `pkg/argocd` with values that come from a mix of `provider.InfraSettings(cfg)`, `cfg.Domain`, and NIC-internal Keycloak/cert-manager defaults. The fields below correspond to env vars set on the `nebari-operator-controller-manager` container.
 
 | Template field | Source | Operator use |
 |----------------|--------|--------------|
@@ -85,9 +90,9 @@ The operator does not see any other parts of `NebariConfig`. In particular, it d
 
 ## 11.5 NIC's Responsibilities (Summary)
 
-- Pin a known-good operator release in `pkg/argocd/templates/manifests/nebari-operator/kustomization.yaml`
+- Pin a known-good operator chart version in `pkg/argocd/templates/apps/nebari-operator.yaml`
 - Render the operator's ArgoCD Application into the GitOps repo with the correct sync wave (after Keycloak, cert-manager, and Envoy Gateway are ready)
-- Render `deployment-patch.yaml` with the Keycloak integration env vars and TLS issuer name listed in §11.4
+- Render `values/nebari-operator/base.yaml` with the Keycloak integration env vars and TLS issuer name listed in §11.4
 
 That's it. NIC does not reconcile `NebariApp` CRs, does not implement the operator's controller, and does not ship any `api/v1alpha1/` package. If you find documentation that says otherwise, it is out of date.
 
@@ -95,13 +100,14 @@ That's it. NIC does not reconcile `NebariApp` CRs, does not implement the operat
 
 Bumping the operator version:
 
-1. Update the `ref:` in `pkg/argocd/templates/manifests/nebari-operator/kustomization.yaml` to the new upstream tag.
-2. Verify the operator's CRD schema hasn't broken NIC's Kustomize patches.
+1. Update the chart `targetRevision` in `pkg/argocd/templates/apps/nebari-operator.yaml` to the new release (chart versions drop the `v`, e.g. `0.1.2`). The chart's default image tag is the matching operator release.
+2. Check the chart's `values.yaml` for renamed or new keys that `values/nebari-operator/base.yaml` relies on (`manager.env`, `manager.envOverrides`, `manager.resources`, `rbac.helpers`). `base.yaml` sets `manager.env: []`, which replaces the chart's whole default list, so a variable a new chart adds there is dropped unless it is moved into `envOverrides`.
 3. Land the change; on next `nic deploy` or `argocd app sync`, the new operator version rolls out.
 
 ## 11.7 References
 
 - Upstream operator repo: <https://github.com/nebari-dev/nebari-operator>
 - ArgoCD app manifest: `pkg/argocd/templates/apps/nebari-operator.yaml`
-- Kustomize patches: `pkg/argocd/templates/manifests/nebari-operator/`
+- Helm values: `pkg/argocd/templates/values/nebari-operator/base.yaml`
+- Operator chart: `oci://quay.io/nebari/charts/nebari-operator`
 - Related discussion of `publicRoutes` + `enforceAtGateway` interaction: [`nebari-operator#118`](https://github.com/nebari-dev/nebari-operator/issues/118)
