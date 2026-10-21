@@ -31,6 +31,10 @@ type DeployOptions struct {
 	// DryRun previews changes without applying them.
 	DryRun bool
 
+	// PlanOut, when non-empty, saves the human-readable OpenTofu plan of a
+	// dry run to this path. Requires DryRun.
+	PlanOut string
+
 	// Timeout overrides the provider's default deploy timeout. Zero means
 	// the provider chooses.
 	Timeout time.Duration
@@ -202,6 +206,7 @@ func (c *Client) Deploy(ctx context.Context, cfg *config.NebariConfig, opts Depl
 	// Deploy infrastructure
 	if err := clusterProvider.Deploy(ctx, cfg.ProjectName, cfg.Cluster, cluster.DeployOptions{
 		DryRun:       opts.DryRun,
+		PlanOut:      opts.PlanOut,
 		Timeout:      opts.Timeout,
 		TrustBundle:  caBundle,
 		BackupBucket: backupBucketSpec(cfg),

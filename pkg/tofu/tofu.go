@@ -96,6 +96,41 @@ func (te *TerraformExecutor) Plan(ctx context.Context, opts ...tfexec.PlanOption
 	return hasChanges, err
 }
 
+// PlanToFile is Plan followed by writing the human-readable rendering of the
+// resulting plan (the output of `tofu show`) to path. An empty path is a plain
+// Plan.
+//
+// The rendered text is written rather than the binary plan file because the
+// binary form can only be inspected from the working directory that produced
+// it, and that directory is temporary (see Cleanup). The rendering carries the
+// field-level diff (old -> new values per attribute) that the structured log
+// stream reduces to a single action verb per resource.
+func (te *TerraformExecutor) PlanToFile(ctx context.Context, path string, opts ...tfexec.PlanOption) (bool, error) {
+	if path == "" {
+		return te.Plan(ctx, opts...)
+	}
+
+	planFile := filepath.Join(te.workingDir, "nic.tfplan")
+	hasChanges, err := te.Plan(ctx, append(opts, tfexec.Out(planFile))...)
+	if err != nil {
+		return hasChanges, err
+	}
+
+	rendered, err := te.ShowPlanFileRaw(signalSafeContext(ctx), planFile)
+	if err != nil {
+		return hasChanges, fmt.Errorf("render plan file: %w", err)
+	}
+	if err := afero.WriteFile(te.appFs, path, []byte(rendered), 0600); err != nil {
+		return hasChanges, fmt.Errorf("write plan to %s: %w", path, err)
+	}
+
+	status.Send(ctx, status.NewUpdate(status.LevelInfo, "Plan written to "+path).
+		WithResource("tofu").
+		WithAction("plan").
+		WithMetadata("path", path))
+	return hasChanges, nil
+}
+
 // Apply wraps tfexec.Terraform.ApplyJSON, streaming output through the status
 // channel attached to ctx.
 func (te *TerraformExecutor) Apply(ctx context.Context, opts ...tfexec.ApplyOption) error {

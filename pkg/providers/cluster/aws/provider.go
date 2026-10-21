@@ -383,7 +383,7 @@ func (p *Provider) Deploy(ctx context.Context, projectName string, clusterConfig
 	}
 
 	if opts.DryRun {
-		_, err = tf.Plan(ctx, planOpts...)
+		_, err = tf.PlanToFile(ctx, opts.PlanOut, planOpts...)
 		if err != nil {
 			span.RecordError(err)
 			return err

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -18,6 +19,7 @@ import (
 var (
 	deployConfigFile string
 	deployDryRun     bool
+	deployPlanOut    string
 	deployTimeout    string
 	deployRegenApps  bool
 
@@ -31,7 +33,8 @@ resources to establish a fully functional Nebari cluster.
 Configs that still contain the reserved CHANGEME placeholder are rejected before
 any provider API call, so an unedited starter cannot provision infrastructure.
 
-Use --dry-run to preview changes without applying them.`,
+Use --dry-run to preview changes without applying them. Add --plan-out to
+save the full OpenTofu plan (field-level diff) of a dry run to a file.`,
 		RunE: runDeploy,
 	}
 )
@@ -39,12 +42,17 @@ Use --dry-run to preview changes without applying them.`,
 func init() {
 	deployCmd.Flags().StringVarP(&deployConfigFile, "file", "f", "", "Path to nebari-config.yaml file (auto-discovered if omitted)")
 	deployCmd.Flags().BoolVar(&deployDryRun, "dry-run", false, "Show what would be deployed without making changes")
+	deployCmd.Flags().StringVar(&deployPlanOut, "plan-out", "", "Write the human-readable OpenTofu plan of a dry run to this file (requires --dry-run)")
 	deployCmd.Flags().StringVar(&deployTimeout, "timeout", "", "Override default timeout (e.g., '45m', '1h')")
 	deployCmd.Flags().BoolVar(&deployRegenApps, "regen-apps", false, "Regenerate ArgoCD application manifests even if already bootstrapped")
 }
 
 func runDeploy(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
+
+	if deployPlanOut != "" && !deployDryRun {
+		return errors.New("--plan-out requires --dry-run")
+	}
 
 	configFile, err := resolveConfigFile(deployConfigFile)
 	if err != nil {
@@ -87,6 +95,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 
 	result, err := client.Deploy(ctx, cfg, nic.DeployOptions{
 		DryRun:    deployDryRun,
+		PlanOut:   deployPlanOut,
 		Timeout:   timeout,
 		RegenApps: deployRegenApps,
 	})

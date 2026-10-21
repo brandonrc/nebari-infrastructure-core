@@ -46,6 +46,11 @@ type DeployOptions struct {
 	DryRun  bool
 	Timeout time.Duration
 
+	// PlanOut, when non-empty, is a path the provider writes the human-readable
+	// OpenTofu plan to during a dry run. Only meaningful when DryRun is true;
+	// providers that do not plan with OpenTofu ignore it.
+	PlanOut string
+
 	// TrustBundle is the resolved top-level CA bundle (base64-encoded PEM),
 	// passed so providers can apply it without seeing the full NebariConfig.
 	TrustBundle string
