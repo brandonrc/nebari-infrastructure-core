@@ -67,6 +67,11 @@ func TestCheckPlanOutWritable(t *testing.T) {
 		})
 	}
 
+	// A file the probe created must not be left behind.
+	if _, err := os.Stat(filepath.Join(dir, "plan.txt")); !os.IsNotExist(err) {
+		t.Errorf("probe left %s behind (stat err = %v)", filepath.Join(dir, "plan.txt"), err)
+	}
+
 	// The check must not truncate an existing plan: the old content stays until
 	// the new plan replaces it.
 	got, err := os.ReadFile(existing) //nolint:gosec // test-owned temp path
