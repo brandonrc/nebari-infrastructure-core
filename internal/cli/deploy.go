@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -50,8 +52,15 @@ func init() {
 func runDeploy(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 
-	if deployPlanOut != "" && !deployDryRun {
-		return errors.New("--plan-out requires --dry-run")
+	if deployPlanOut != "" {
+		if !deployDryRun {
+			return errors.New("--plan-out requires --dry-run")
+		}
+		// Fail now rather than after a multi-minute plan: PlanToFile only
+		// touches the path once tofu plan and tofu show have finished.
+		if err := checkPlanOutWritable(deployPlanOut); err != nil {
+			return err
+		}
 	}
 
 	configFile, err := resolveConfigFile(deployConfigFile)
@@ -120,6 +129,26 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// checkPlanOutWritable verifies that path can be created or overwritten: its
+// parent must be an existing directory and the file must open for writing.
+// The file is opened without truncation so an existing plan keeps its content
+// until the new plan replaces it.
+func checkPlanOutWritable(path string) error {
+	parent := filepath.Dir(path)
+	info, err := os.Stat(parent)
+	if err != nil {
+		return fmt.Errorf("--plan-out: directory %s: %w", parent, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("--plan-out: %s is not a directory", parent)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0600) //nolint:gosec // operator-chosen output path
+	if err != nil {
+		return fmt.Errorf("--plan-out: %w", err)
+	}
+	return f.Close()
 }
 
 // printDNSGuidance prints instructions for manual DNS configuration. When the

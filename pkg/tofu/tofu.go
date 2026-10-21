@@ -16,6 +16,8 @@ import (
 	tfjson "github.com/hashicorp/terraform-json"
 	"github.com/opentofu/tofudl"
 	"github.com/spf13/afero"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/nebari-dev/nebari-infrastructure-core/pkg/status"
 )
@@ -110,17 +112,25 @@ func (te *TerraformExecutor) PlanToFile(ctx context.Context, path string, opts .
 		return te.Plan(ctx, opts...)
 	}
 
+	ctx, span := otel.Tracer("nebari-infrastructure-core").Start(ctx, "tofu.PlanToFile")
+	defer span.End()
+	span.SetAttributes(attribute.String("tofu.plan.path", path))
+
 	planFile := filepath.Join(te.workingDir, "nic.tfplan")
 	hasChanges, err := te.Plan(ctx, append(opts, tfexec.Out(planFile))...)
 	if err != nil {
+		span.RecordError(err)
 		return hasChanges, err
 	}
+	span.SetAttributes(attribute.Bool("tofu.plan.has_changes", hasChanges))
 
 	rendered, err := te.ShowPlanFileRaw(signalSafeContext(ctx), planFile)
 	if err != nil {
+		span.RecordError(err)
 		return hasChanges, fmt.Errorf("render plan file: %w", err)
 	}
 	if err := afero.WriteFile(te.appFs, path, []byte(rendered), 0600); err != nil {
+		span.RecordError(err)
 		return hasChanges, fmt.Errorf("write plan to %s: %w", path, err)
 	}
 
