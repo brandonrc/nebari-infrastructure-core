@@ -234,6 +234,7 @@ Options:
 
 - `-f, --file`: Path to config.yaml file (auto-discovered if omitted)
 - `--dry-run`: Preview changes without applying them
+- `--plan-out`: Write the human-readable OpenTofu plan of a dry run to this file (requires `--dry-run`)
 - `--timeout`: Override default timeout (e.g., '45m', '1h')
 - `--regen-apps`: Regenerate ArgoCD application manifests even if already bootstrapped
 
