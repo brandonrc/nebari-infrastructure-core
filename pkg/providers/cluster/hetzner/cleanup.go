@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/nebari-dev/nebari-infrastructure-core/pkg/status"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -373,9 +376,160 @@ func deleteLoadBalancer(ctx context.Context, client *http.Client, token string, 
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	// Since 2026-10-05 the API answers with an Action instead of an empty 204
+	// (documented as 201, observed as 200), so accept any 2xx and wait for it.
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return fmt.Errorf("hetzner API returned %d deleting load balancer", resp.StatusCode)
 	}
 
-	return nil
+	var result actionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("failed to decode load balancer delete response: %w", err)
+	}
+	if result.Action == nil {
+		return nil
+	}
+
+	status.Send(ctx, status.NewUpdate(status.LevelInfo, fmt.Sprintf("Waiting for Hetzner to delete load balancer %d", lbID)).
+		WithResource("provider").WithAction("destroy"))
+
+	return waitForAction(ctx, client, token, result.Action.ID)
+}
+
+// --- Actions ---
+
+// hetznerAction represents an asynchronous operation from the Hetzner Cloud API.
+type hetznerAction struct {
+	ID     int64  `json:"id"`
+	Status string `json:"status"`
+	Error  *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+type actionResponse struct {
+	Action *hetznerAction `json:"action"`
+}
+
+var (
+	actionPollInterval = 2 * time.Second
+	actionTimeout      = 5 * time.Minute
+)
+
+// errTransient marks a failed poll that is worth retrying: a network error,
+// a 429, or a 5xx (the API documents 502 and 504 as "please retry").
+var errTransient = errors.New("transient")
+
+// waitForAction polls an action until it succeeds, fails, or actionTimeout
+// elapses. Transient poll failures are retried until the deadline.
+func waitForAction(ctx context.Context, client *http.Client, token string, actionID int64) error {
+	tracer := otel.Tracer("nebari-infrastructure-core")
+	parentCtx, span := tracer.Start(ctx, "hetzner.waitForAction")
+	defer span.End()
+
+	span.SetAttributes(attribute.Int64("action_id", actionID))
+
+	ctx, cancel := context.WithTimeout(parentCtx, actionTimeout)
+	defer cancel()
+
+	lastStatus := "unknown"
+	var lastErr error
+	stopped := func() error {
+		var err error
+		if parentCtx.Err() != nil {
+			err = fmt.Errorf("stopped waiting for action %d (last status %q), the deletion may still be in progress: %w", actionID, lastStatus, parentCtx.Err())
+		} else {
+			err = fmt.Errorf("timed out waiting for action %d (last status %q): %w", actionID, lastStatus, ctx.Err())
+			if lastErr != nil {
+				err = fmt.Errorf("%w (last poll error: %v)", err, lastErr)
+			}
+		}
+		span.RecordError(err)
+		return err
+	}
+	for {
+		action, err := getAction(ctx, client, token, actionID)
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return stopped()
+		case err != nil && errors.Is(err, errTransient):
+			lastErr = err
+		case err != nil:
+			span.RecordError(err)
+			return fmt.Errorf("failed to get action %d: %w", actionID, err)
+		default:
+			lastErr = nil
+			lastStatus = action.Status
+			switch action.Status {
+			case "success":
+				return nil
+			case "error":
+				err := fmt.Errorf("action %d failed", actionID)
+				if action.Error != nil {
+					err = fmt.Errorf("action %d failed: %s: %s", actionID, action.Error.Code, action.Error.Message)
+				}
+				span.RecordError(err)
+				return err
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return stopped()
+		case <-time.After(actionPollInterval):
+		}
+	}
+}
+
+func getAction(ctx context.Context, client *http.Client, token string, actionID int64) (*hetznerAction, error) {
+	tracer := otel.Tracer("nebari-infrastructure-core")
+	ctx, span := tracer.Start(ctx, "hetzner.getAction")
+	defer span.End()
+
+	span.SetAttributes(attribute.Int64("action_id", actionID))
+
+	url := fmt.Sprintf("%s/actions/%d", hetznerAPIBase, actionID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		span.RecordError(err)
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		err = fmt.Errorf("%w: %w", errTransient, err)
+		span.RecordError(err)
+		return nil, err
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		err := fmt.Errorf("%w: hetzner API returned %d getting action", errTransient, resp.StatusCode)
+		span.RecordError(err)
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		err := fmt.Errorf("hetzner API returned %d getting action", resp.StatusCode)
+		span.RecordError(err)
+		return nil, err
+	}
+
+	var result actionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		err = fmt.Errorf("failed to decode action: %w", err)
+		span.RecordError(err)
+		return nil, err
+	}
+	if result.Action == nil {
+		err := fmt.Errorf("hetzner API returned no action")
+		span.RecordError(err)
+		return nil, err
+	}
+
+	return result.Action, nil
 }
