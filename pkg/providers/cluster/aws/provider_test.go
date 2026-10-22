@@ -166,6 +166,65 @@ func TestValidateTaints(t *testing.T) {
 	}
 }
 
+func TestValidateNodeGroupAvailabilityZones(t *testing.T) {
+	clusterAZs := []string{"us-west-2a", "us-west-2b"}
+	tests := []struct {
+		name      string
+		groupAZs  []string
+		cfg       Config
+		errSubstr string // "" means no error expected
+	}{
+		{name: "unset is fine", cfg: Config{}},
+		{name: "cluster AZ is accepted", groupAZs: []string{"us-west-2a"}, cfg: Config{AvailabilityZones: clusterAZs}},
+		{name: "AZ outside the cluster is rejected", groupAZs: []string{"us-west-2a", "us-west-2c"}, cfg: Config{AvailabilityZones: clusterAZs}, errSubstr: "us-west-2c is not one of"},
+		// Requiring them would make existing clusters set a list that can replace their subnets.
+		{name: "unset cluster AZs are left to the module", groupAZs: []string{"us-west-2c"}, cfg: Config{}},
+		// The cluster AZs are set in these rows, so only whether NIC creates the VPC skips the check.
+		{name: "existing subnets are left to the module", groupAZs: []string{"us-west-2c"}, cfg: Config{AvailabilityZones: clusterAZs, ExistingVPCID: "vpc-1", ExistingPrivateSubnetIDs: []string{"subnet-1"}}},
+		{name: "existing VPC alone is left to the module", groupAZs: []string{"us-west-2c"}, cfg: Config{AvailabilityZones: clusterAZs, ExistingVPCID: "vpc-1"}},
+		{name: "existing subnets alone are left to the module", groupAZs: []string{"us-west-2c"}, cfg: Config{AvailabilityZones: clusterAZs, ExistingPrivateSubnetIDs: []string{"subnet-1"}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateNodeGroupAvailabilityZones("user", NodeGroup{Instance: "m5.xlarge", AvailabilityZones: tt.groupAZs}, &tt.cfg)
+			if tt.errSubstr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.errSubstr)
+			}
+			if !strings.Contains(err.Error(), tt.errSubstr) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tt.errSubstr)
+			}
+		})
+	}
+}
+
+// TestValidate_NodeGroupAvailabilityZones checks that Validate runs the node
+// group AZ check, not just that the check itself works.
+func TestValidate_NodeGroupAvailabilityZones(t *testing.T) {
+	cfg := &config.ClusterConfig{Providers: map[string]any{"aws": map[string]any{
+		"region":             "us-west-2",
+		"kubernetes_version": "1.34",
+		"availability_zones": []any{"us-west-2a", "us-west-2b"},
+		"node_groups": map[string]any{
+			"user": map[string]any{"instance": "m5.xlarge", "availability_zones": []any{"us-west-2c"}},
+		},
+	}}}
+
+	err := NewProvider().Validate(context.Background(), "test-project", cfg)
+	if err == nil {
+		t.Fatal("expected an error for a node group AZ outside the cluster's availability_zones, got nil")
+	}
+	if !strings.Contains(err.Error(), "us-west-2c is not one of") {
+		t.Fatalf("expected the node group AZ error, got: %v", err)
+	}
+}
+
 func TestInfraSettings_LoadBalancerScheme(t *testing.T) {
 	const schemeKey = "service.beta.kubernetes.io/aws-load-balancer-scheme"
 
