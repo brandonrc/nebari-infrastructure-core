@@ -45,6 +45,14 @@ const (
 // disabled so the device plugin doesn't claim all /dev/infiniband/uverbs*
 // devices and conflict with the AWS EFA device plugin on EFA-enabled nodes.
 //
+// The operator's node DaemonSets and the NFD worker tolerate every NoSchedule
+// taint. The chart's defaults tolerate only nvidia.com/gpu, so a GPU node
+// group that carries a second taint (for example one dedicating the group to
+// a team) never gets the device plugin, never advertises nvidia.com/gpu, and
+// its GPU pods stay Pending. The DaemonSets select nodes by the labels NFD
+// and the operator set on GPU nodes, so the wider toleration does not put
+// them on any other node; the NFD worker already runs on every node.
+//
 // When the operator grows to other providers these values will need to vary by
 // provider; for now they are AWS-specific.
 func gpuOperatorHelmValues() map[string]any {
@@ -57,6 +65,23 @@ func gpuOperatorHelmValues() map[string]any {
 				map[string]any{"name": "MOFED_ENABLED", "value": "false"},
 			},
 		},
+		"daemonsets": map[string]any{
+			"tolerations": tolerateAllNoSchedule(),
+		},
+		"node-feature-discovery": map[string]any{
+			"worker": map[string]any{
+				"tolerations": tolerateAllNoSchedule(),
+			},
+		},
+	}
+}
+
+// tolerateAllNoSchedule tolerates every NoSchedule taint, whatever its key
+// (nvidia.com/gpu and the control-plane taint the chart's defaults list
+// included).
+func tolerateAllNoSchedule() []any {
+	return []any{
+		map[string]any{"operator": "Exists", "effect": "NoSchedule"},
 	}
 }
 

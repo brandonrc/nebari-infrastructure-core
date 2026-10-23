@@ -79,4 +79,32 @@ func TestGPUOperatorHelmValues(t *testing.T) {
 			t.Errorf("expected MOFED_ENABLED=false, got %v", first)
 		}
 	})
+
+	// A GPU node group with a second NoSchedule taint (one team's dedicated
+	// pool) must still get the device plugin and NFD, or it never advertises
+	// nvidia.com/gpu.
+	tolerationPaths := []struct {
+		name string
+		get  func() any
+	}{
+		{"daemonsets", func() any { return v["daemonsets"].(map[string]any)["tolerations"] }},
+		{"node-feature-discovery.worker", func() any {
+			return v["node-feature-discovery"].(map[string]any)["worker"].(map[string]any)["tolerations"]
+		}},
+	}
+	for _, tp := range tolerationPaths {
+		t.Run(tp.name+" tolerates every NoSchedule taint", func(t *testing.T) {
+			tols, ok := tp.get().([]any)
+			if !ok || len(tols) != 1 {
+				t.Fatalf("%s.tolerations should hold one toleration, got %v", tp.name, tp.get())
+			}
+			tol, _ := tols[0].(map[string]any)
+			if tol["operator"] != "Exists" || tol["effect"] != "NoSchedule" {
+				t.Errorf("%s.tolerations[0] = %v, want operator Exists, effect NoSchedule", tp.name, tol)
+			}
+			if _, hasKey := tol["key"]; hasKey {
+				t.Errorf("%s.tolerations[0] must not set a key, or it tolerates only that taint: %v", tp.name, tol)
+			}
+		})
+	}
 }
